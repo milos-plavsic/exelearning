@@ -286,10 +286,14 @@ const app = new Elysia()
             return (await compressResponse(responseValue, acceptEncoding)) ?? responseValue;
         }
 
-        const compressed = compressResponseValue(responseValue, acceptEncoding);
+        const compressed = compressResponseValue(responseValue, acceptEncoding, set.headers);
         if (compressed) return compressed;
 
         const status = set.status as number;
+        // Raw bytes (e.g. the CodeMagic/exemindmap editor handlers above,
+        // which set Content-Type/Content-Length on set.headers themselves) —
+        // never JSON.stringify these, Elysia merges set.headers in either way.
+        if (responseValue instanceof Uint8Array) return new Response(responseValue, { status });
         if (responseValue === undefined) return new Response(null, { status });
         if (typeof responseValue === 'object' && responseValue !== null) {
             return Response.json(responseValue, { status });

@@ -44,14 +44,34 @@ export function isCompressibleContentType(contentType: string | null): boolean {
     return COMPRESSIBLE_TYPES.includes(type);
 }
 
+/** Elysia's `set.headers` is a plain object handlers write to as either 'Content-Type' or 'content-type'. */
+export function getHeaderCaseInsensitive(headers: Record<string, unknown> | undefined, name: string): string | null {
+    if (!headers) return null;
+    const lower = name.toLowerCase();
+    for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === lower) {
+            const value = headers[key];
+            return typeof value === 'string' ? value : null;
+        }
+    }
+    return null;
+}
+
 export type SerializedResponseValue = {
     bytes: Uint8Array;
     contentType: string;
 };
 
-/** Mirrors Elysia's own default serialization for values it turns into a Response. */
+/**
+ * Mirrors Elysia's own default serialization for values it turns into a
+ * Response. Returns undefined for raw bytes (Buffer/Uint8Array) — those are
+ * handled directly in compressResponseValue instead, since JSON.stringify-ing
+ * a Buffer would corrupt it (route handlers like the CodeMagic/exemindmap
+ * editor handlers in src/index.ts return one directly, with their own
+ * Content-Type set via set.headers).
+ */
 export function serializeResponseValue(responseValue: unknown): SerializedResponseValue | undefined {
-    if (responseValue === undefined) return undefined;
+    if (responseValue === undefined || responseValue instanceof Uint8Array) return undefined;
     const isJson = typeof responseValue === 'object' && responseValue !== null;
     const text = isJson ? JSON.stringify(responseValue) : String(responseValue);
     return {
@@ -62,14 +82,27 @@ export function serializeResponseValue(responseValue: unknown): SerializedRespon
 
 /**
  * Builds a gzip-compressed Response for a plain (non-Response) route return
- * value, or returns undefined when compression shouldn't apply.
+ * value, or returns undefined when compression shouldn't apply. `setHeaders`
+ * is Elysia's `set.headers` — the only place a Content-Type is available
+ * when responseValue is raw bytes rather than a JSON-serializable value.
  */
 export function compressResponseValue(
     responseValue: unknown,
     acceptEncodingHeader: string | null,
+    setHeaders?: Record<string, unknown>,
 ): Response | undefined {
     if (responseValue instanceof Response) return undefined;
     if (!acceptsGzip(acceptEncodingHeader)) return undefined;
+
+    if (responseValue instanceof Uint8Array) {
+        const contentType = getHeaderCaseInsensitive(setHeaders, 'content-type');
+        if (!isCompressibleContentType(contentType)) return undefined;
+        if (responseValue.length < MIN_COMPRESS_BYTES) return undefined;
+
+        return new Response(zlib.gzipSync(responseValue), {
+            headers: { 'Content-Type': contentType as string, 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding' },
+        });
+    }
 
     const serialized = serializeResponseValue(responseValue);
     if (!serialized || serialized.bytes.length < MIN_COMPRESS_BYTES) return undefined;

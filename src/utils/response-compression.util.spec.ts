@@ -2,6 +2,7 @@ import * as zlib from 'zlib';
 import {
     acceptsGzip,
     isCompressibleContentType,
+    getHeaderCaseInsensitive,
     serializeResponseValue,
     compressResponseValue,
     compressResponse,
@@ -45,6 +46,23 @@ describe('serializeResponseValue', () => {
     it('returns undefined for an undefined response value', () => {
         expect(serializeResponseValue(undefined)).toBeUndefined();
     });
+
+    it('returns undefined for raw bytes (Buffer/Uint8Array) — must never be JSON.stringify-ed', () => {
+        expect(serializeResponseValue(Buffer.from('<html>hi</html>'))).toBeUndefined();
+        expect(serializeResponseValue(new Uint8Array([1, 2, 3]))).toBeUndefined();
+    });
+});
+
+describe('getHeaderCaseInsensitive', () => {
+    it('finds a header regardless of key casing', () => {
+        expect(getHeaderCaseInsensitive({ 'Content-Type': 'text/html' }, 'content-type')).toBe('text/html');
+        expect(getHeaderCaseInsensitive({ 'content-type': 'text/html' }, 'Content-Type')).toBe('text/html');
+    });
+
+    it('returns null when missing or headers are undefined', () => {
+        expect(getHeaderCaseInsensitive({ 'X-Other': 'x' }, 'content-type')).toBeNull();
+        expect(getHeaderCaseInsensitive(undefined, 'content-type')).toBeNull();
+    });
 });
 
 describe('compressResponseValue', () => {
@@ -77,6 +95,37 @@ describe('compressResponseValue', () => {
     it('leaves an explicit Response untouched — that path goes through compressResponse instead', () => {
         const original = new Response('binary-ish content', { status: 206 });
         expect(compressResponseValue(original, 'gzip')).toBeUndefined();
+    });
+
+    // Regression: src/index.ts's exemindmap/codemagic editor handlers read a
+    // file with fs.readFileSync and return the Buffer directly, setting
+    // Content-Type via set.headers. JSON.stringify-ing a Buffer here would
+    // silently corrupt served HTML into `{"type":"Buffer","data":[...]}`.
+    describe('raw bytes (Buffer/Uint8Array) with Content-Type from set.headers', () => {
+        const html = Buffer.from(`<html><body>${'x'.repeat(2000)}</body></html>`);
+
+        it('compresses when the set.headers Content-Type is compressible', () => {
+            const response = compressResponseValue(html, 'gzip', { 'Content-Type': 'text/html; charset=utf-8' });
+            expect(response).toBeInstanceOf(Response);
+            expect(response?.headers.get('Content-Encoding')).toBe('gzip');
+            expect(response?.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+        });
+
+        it('produces a body that decompresses back to the exact original bytes', async () => {
+            const response = compressResponseValue(html, 'gzip', { 'Content-Type': 'text/html' });
+            const decompressed = zlib.gunzipSync(new Uint8Array(await response!.arrayBuffer()));
+            expect(Buffer.compare(decompressed, html)).toBe(0);
+        });
+
+        it('does not compress without a compressible Content-Type in set.headers', () => {
+            expect(compressResponseValue(html, 'gzip', { 'Content-Type': 'application/octet-stream' })).toBeUndefined();
+            expect(compressResponseValue(html, 'gzip', undefined)).toBeUndefined();
+        });
+
+        it('finds Content-Type set with lowercase key too', () => {
+            const response = compressResponseValue(html, 'gzip', { 'content-type': 'text/html' });
+            expect(response?.headers.get('Content-Encoding')).toBe('gzip');
+        });
     });
 });
 
