@@ -1,10 +1,13 @@
 #!/usr/bin/env bun
 /**
- * Pre-compresses eligible static assets into .gz/.br/.zst siblings, for
- * servers that support gzip_static/brotli_static/zstd_static (see
- * Dockerfile.static's nginx config). The original uncompressed file is kept
- * untouched — this only adds sibling files, so non-Docker consumers of
- * dist/static (release ZIP, Electron packaging) are unaffected.
+ * Pre-compresses eligible static assets into .gz siblings, for servers that
+ * support gzip_static (see Dockerfile.static's nginx config). The original
+ * uncompressed file is kept untouched — this only adds a sibling file, so
+ * non-Docker consumers of dist/static (release ZIP, Electron packaging) are
+ * unaffected.
+ *
+ * Runs once at build time rather than negotiated on the fly per-request, so
+ * every request gets the compressed bytes with zero runtime CPU cost.
  *
  * Usage: bun scripts/precompress-dist.ts <dir>
  */
@@ -14,7 +17,7 @@ import * as zlib from 'zlib';
 
 const COMPRESSIBLE_EXTENSIONS = new Set(['.js', '.mjs', '.css', '.json', '.html', '.svg', '.xml', '.txt']);
 
-/** Skip files too small for three extra copies to be worth it. */
+/** Skip files too small for an extra copy to be worth it. */
 const MIN_SIZE_BYTES = 1024;
 
 export function isPrecompressible(fileName: string): boolean {
@@ -29,25 +32,10 @@ export function gzipStatic(data: Buffer): Buffer {
     return zlib.gzipSync(data, { level: zlib.constants.Z_BEST_COMPRESSION });
 }
 
-export function brotliStatic(data: Buffer): Buffer {
-    return zlib.brotliCompressSync(data, {
-        params: {
-            [zlib.constants.BROTLI_PARAM_QUALITY]: zlib.constants.BROTLI_MAX_QUALITY,
-            [zlib.constants.BROTLI_PARAM_SIZE_HINT]: data.length,
-        },
-    });
-}
-
-export function zstdStatic(data: Buffer): Buffer {
-    return zlib.zstdCompressSync(data, { params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 } });
-}
-
 export type PrecompressStats = {
     count: number;
     origTotal: number;
     gzTotal: number;
-    brTotal: number;
-    zstTotal: number;
 };
 
 function walkDir(dir: string, onFile: (absPath: string) => void): void {
@@ -62,7 +50,7 @@ function walkDir(dir: string, onFile: (absPath: string) => void): void {
 }
 
 export function precompressDir(targetDir: string): PrecompressStats {
-    const stats: PrecompressStats = { count: 0, origTotal: 0, gzTotal: 0, brTotal: 0, zstTotal: 0 };
+    const stats: PrecompressStats = { count: 0, origTotal: 0, gzTotal: 0 };
 
     walkDir(targetDir, (absPath) => {
         const fileName = path.basename(absPath);
@@ -71,18 +59,11 @@ export function precompressDir(targetDir: string): PrecompressStats {
         if (data.length < MIN_SIZE_BYTES) return;
 
         const gz = gzipStatic(data);
-        const br = brotliStatic(data);
-        const zst = zstdStatic(data);
-
         fs.writeFileSync(absPath + '.gz', gz);
-        fs.writeFileSync(absPath + '.br', br);
-        fs.writeFileSync(absPath + '.zst', zst);
 
         stats.count += 1;
         stats.origTotal += data.length;
         stats.gzTotal += gz.length;
-        stats.brTotal += br.length;
-        stats.zstTotal += zst.length;
     });
 
     return stats;
@@ -96,13 +77,11 @@ function main() {
     }
 
     const stats = precompressDir(targetDir);
-    const pct = (compressed: number) => (stats.origTotal > 0 ? Math.round((1 - compressed / stats.origTotal) * 100) : 0);
+    const pct = stats.origTotal > 0 ? Math.round((1 - stats.gzTotal / stats.origTotal) * 100) : 0;
 
-    console.log(`Pre-compressed ${stats.count} file(s) in ${targetDir}:`);
+    console.log(`Pre-compressed ${stats.count} file(s) in ${targetDir} with gzip:`);
     console.log(`  original: ${(stats.origTotal / 1024 / 1024).toFixed(2)} MB`);
-    console.log(`  gzip:     ${(stats.gzTotal / 1024 / 1024).toFixed(2)} MB (-${pct(stats.gzTotal)}%)`);
-    console.log(`  brotli:   ${(stats.brTotal / 1024 / 1024).toFixed(2)} MB (-${pct(stats.brTotal)}%)`);
-    console.log(`  zstd:     ${(stats.zstTotal / 1024 / 1024).toFixed(2)} MB (-${pct(stats.zstTotal)}%)`);
+    console.log(`  gzip:     ${(stats.gzTotal / 1024 / 1024).toFixed(2)} MB (-${pct}%)`);
 }
 
 if (import.meta.main) {

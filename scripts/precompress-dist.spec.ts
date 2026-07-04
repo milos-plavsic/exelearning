@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as zlib from 'zlib';
-import { isPrecompressible, gzipStatic, brotliStatic, zstdStatic, precompressDir } from './precompress-dist';
+import { isPrecompressible, gzipStatic, precompressDir } from './precompress-dist';
 
 describe('isPrecompressible', () => {
     it('accepts compressible text-based extensions', () => {
@@ -27,25 +27,12 @@ describe('isPrecompressible', () => {
     });
 });
 
-describe('gzipStatic / brotliStatic / zstdStatic', () => {
-    const sample = Buffer.from('x'.repeat(5000), 'utf-8');
-
-    it('gzipStatic round-trips and shrinks repetitive data', () => {
+describe('gzipStatic', () => {
+    it('round-trips and shrinks repetitive data', () => {
+        const sample = Buffer.from('x'.repeat(5000), 'utf-8');
         const compressed = gzipStatic(sample);
         expect(compressed.length).toBeLessThan(sample.length);
         expect(zlib.gunzipSync(compressed)).toEqual(sample);
-    });
-
-    it('brotliStatic round-trips and shrinks repetitive data', () => {
-        const compressed = brotliStatic(sample);
-        expect(compressed.length).toBeLessThan(sample.length);
-        expect(zlib.brotliDecompressSync(compressed)).toEqual(sample);
-    });
-
-    it('zstdStatic round-trips and shrinks repetitive data', () => {
-        const compressed = zstdStatic(sample);
-        expect(compressed.length).toBeLessThan(sample.length);
-        expect(zlib.zstdDecompressSync(compressed)).toEqual(sample);
     });
 });
 
@@ -56,7 +43,7 @@ describe('precompressDir', () => {
         if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    it('creates .gz/.br/.zst siblings only for eligible, large-enough files', () => {
+    it('creates .gz siblings only for eligible, large-enough files', () => {
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'precompress-test-'));
         const bigJs = 'console.log("x");'.repeat(200); // > 1KB
         fs.writeFileSync(path.join(tmpDir, 'app.js'), bigJs);
@@ -69,8 +56,6 @@ describe('precompressDir', () => {
 
         expect(stats.count).toBe(2);
         expect(fs.existsSync(path.join(tmpDir, 'app.js.gz'))).toBe(true);
-        expect(fs.existsSync(path.join(tmpDir, 'app.js.br'))).toBe(true);
-        expect(fs.existsSync(path.join(tmpDir, 'app.js.zst'))).toBe(true);
         expect(fs.existsSync(path.join(tmpDir, 'nested', 'data.json.gz'))).toBe(true);
         expect(fs.existsSync(path.join(tmpDir, 'tiny.css.gz'))).toBe(false);
         expect(fs.existsSync(path.join(tmpDir, 'logo.png.gz'))).toBe(false);
@@ -78,7 +63,7 @@ describe('precompressDir', () => {
         // Original files are untouched
         expect(fs.readFileSync(path.join(tmpDir, 'app.js'), 'utf-8')).toBe(bigJs);
 
-        // Compressed siblings decompress back to the original bytes
+        // Compressed sibling decompresses back to the original bytes
         const gz = fs.readFileSync(path.join(tmpDir, 'app.js.gz'));
         expect(zlib.gunzipSync(gz).toString('utf-8')).toBe(bigJs);
     });
