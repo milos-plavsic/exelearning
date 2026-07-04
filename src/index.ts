@@ -43,6 +43,7 @@ import { renderTemplate, setRenderLocale } from './services/template';
 import { getSettingNumber } from './services/app-settings';
 import { isMaintenanceMode, shouldBypassMaintenance, isAdminRequest } from './services/maintenance';
 import { getBasePath } from './utils/basepath.util';
+import { compressResponseValue, compressResponse } from './utils/response-compression.util';
 import { serveSiteThemeFile } from './utils/site-theme-file';
 import { rewriteCodemagicAssetPaths } from './utils/editor-html.util';
 import { HttpException, TranslatableException, getStatusText } from './exceptions';
@@ -268,6 +269,35 @@ const app = new Elysia()
 <body><h1>Error ${statusCode}</h1><p>${error.message}</p>
 <a href="${basePath}/login">Return to login</a></body></html>`;
         }
+    })
+    // gzip-compress route responses for clients that accept it — binary
+    // downloads (ZIP/EPUB/octet-stream exports) and anything already
+    // Content-Encoding'd are left untouched (see response-compression.util.ts).
+    //
+    // Always resolves to an explicit Response, never `undefined`: once any
+    // mapResponse hook is registered, Elysia stops applying its own default
+    // wrapping for onError-derived values, so falling through with
+    // `undefined` here breaks error responses (they come back empty with
+    // the wrong status).
+    .mapResponse(async ({ request, responseValue, set }) => {
+        const acceptEncoding = request.headers.get('accept-encoding');
+
+        if (responseValue instanceof Response) {
+            return (await compressResponse(responseValue, acceptEncoding)) ?? responseValue;
+        }
+
+        const compressed = compressResponseValue(responseValue, acceptEncoding);
+        if (compressed) return compressed;
+
+        const status = set.status as number;
+        if (responseValue === undefined) return new Response(null, { status });
+        if (typeof responseValue === 'object' && responseValue !== null) {
+            return Response.json(responseValue, { status });
+        }
+        return new Response(String(responseValue), {
+            status,
+            headers: { 'content-type': 'text/plain; charset=utf-8' },
+        });
     })
     .use(
         cors({
