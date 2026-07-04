@@ -2,7 +2,11 @@
 # Dockerfile.static - Lightweight container for static PWA version
 #
 # This container packages the static/offline version of eXeLearning (PWA)
-# using nginx:alpine (~8MB) to facilitate deployment without a backend.
+# using Alpine's native nginx package (~8MB) to facilitate deployment without
+# a backend. Alpine's own nginx build (unlike the nginx.org "nginx:alpine"
+# image) has matching apk packages for the ngx_brotli and zstd-nginx-module
+# dynamic modules, so responses are served pre-compressed with gzip, brotli
+# and zstd — see docker/static-nginx/.
 #
 # Features:
 # - No database, no backend, no real-time collaboration
@@ -19,9 +23,13 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY . .
 ARG VERSION=latest
-RUN bun run build:static -- --version=${VERSION}
+RUN bun run build:static -- --version=${VERSION} && \
+    bun scripts/precompress-dist.ts dist/static
 
-FROM nginx:alpine
+FROM alpine:3.22
+RUN apk add --no-cache nginx nginx-mod-http-brotli nginx-mod-http-zstd && \
+    rm -f /etc/nginx/http.d/default.conf
+COPY docker/static-nginx/exelearning-static.conf /etc/nginx/http.d/exelearning-static.conf
 COPY --from=builder /app/dist/static /usr/share/nginx/html
 LABEL org.opencontainers.image.title="eXeLearning Static" \
       org.opencontainers.image.description="eXeLearning PWA - Static version" \
@@ -30,4 +38,5 @@ LABEL org.opencontainers.image.title="eXeLearning Static" \
       org.opencontainers.image.source="https://github.com/exelearning/exelearning"
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget -qO- http://localhost/ || exit 1
+    CMD wget -qO- http://localhost/healthcheck || exit 1
+CMD ["nginx", "-g", "daemon off;"]
