@@ -2,13 +2,17 @@
  * gzip compression for Elysia's mapResponse hook (src/index.ts).
  *
  * Handles two shapes a route handler can return:
- *  - A plain value (object/string) Elysia would otherwise auto-serialize to
- *    JSON/text (compressResponseValue).
+ *  - A plain value (object/string/raw bytes) Elysia would otherwise
+ *    auto-serialize to JSON/text (compressResponseValue).
  *  - An explicit Response — used throughout src/routes/pages.ts to set a
  *    custom Content-Type on rendered HTML (compressResponse). Only bodies
  *    whose Content-Type is in COMPRESSIBLE_TYPES are read and recompressed;
  *    binary downloads (ZIP/EPUB/octet-stream exports) and anything already
  *    Content-Encoding'd are left untouched so they're never buffered.
+ *
+ * A third shape — async generators, used for SSE streams — is detected with
+ * isAsyncIterable and skipped entirely by the mapResponse hook itself before
+ * either of the above ever sees it.
  */
 import * as zlib from 'zlib';
 
@@ -26,6 +30,17 @@ const COMPRESSIBLE_TYPES = [
 ];
 
 const encoder = new TextEncoder();
+
+/**
+ * True for async generators / async iterables — e.g. the SSE link-validation
+ * stream in src/routes/project.ts (`async function* (...) { yield {...} }`).
+ * These are `typeof 'object'` like any plain value, but must never be
+ * JSON.stringify-ed or buffered: Elysia turns them into a chunked
+ * text/event-stream Response itself.
+ */
+export function isAsyncIterable(value: unknown): boolean {
+    return typeof value === 'object' && value !== null && typeof (value as any)[Symbol.asyncIterator] === 'function';
+}
 
 /** Accept-Encoding is a comma-separated list of tokens, each optionally with a ";q=" weight. */
 export function acceptsGzip(acceptEncodingHeader: string | null): boolean {

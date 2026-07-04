@@ -43,7 +43,7 @@ import { renderTemplate, setRenderLocale } from './services/template';
 import { getSettingNumber } from './services/app-settings';
 import { isMaintenanceMode, shouldBypassMaintenance, isAdminRequest } from './services/maintenance';
 import { getBasePath } from './utils/basepath.util';
-import { compressResponseValue, compressResponse } from './utils/response-compression.util';
+import { compressResponseValue, compressResponse, isAsyncIterable } from './utils/response-compression.util';
 import { serveSiteThemeFile } from './utils/site-theme-file';
 import { rewriteCodemagicAssetPaths } from './utils/editor-html.util';
 import { HttpException, TranslatableException, getStatusText } from './exceptions';
@@ -280,6 +280,15 @@ const app = new Elysia()
     // `undefined` here breaks error responses (they come back empty with
     // the wrong status).
     .mapResponse(async ({ request, responseValue, set }) => {
+        // Generator handlers (e.g. the SSE link-validation stream in
+        // src/routes/project.ts, `async function* (...) { yield {...} }`)
+        // return an async iterable, not a plain value — Elysia turns that
+        // into a text/event-stream Response itself. Never touch it: it's
+        // typeof 'object' like any plain value, so JSON.stringify-ing it
+        // (as `{}`, since generators have no own enumerable properties)
+        // would silently swallow the whole stream.
+        if (isAsyncIterable(responseValue)) return undefined;
+
         const acceptEncoding = request.headers.get('accept-encoding');
 
         if (responseValue instanceof Response) {
