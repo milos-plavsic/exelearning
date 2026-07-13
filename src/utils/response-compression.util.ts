@@ -1,75 +1,127 @@
 /**
- * gzip compression for Elysia's mapResponse hook (src/index.ts).
+ * gzip compression helpers for Elysia's mapResponse hook (src/index.ts).
  *
- * Handles two shapes a route handler can return:
- *  - A plain value (object/string/raw bytes) Elysia would otherwise
- *    auto-serialize to JSON/text (compressResponseValue).
- *  - An explicit Response — used throughout src/routes/pages.ts to set a
- *    custom Content-Type on rendered HTML (compressResponse). Only bodies
- *    whose Content-Type is in COMPRESSIBLE_TYPES are read and recompressed;
- *    binary downloads (ZIP/EPUB/octet-stream exports) and anything already
- *    Content-Encoding'd are left untouched so they're never buffered.
- *
- * A third shape — async generators, used for SSE streams — is detected with
- * isAsyncIterable and skipped entirely by the mapResponse hook itself before
- * either of the above ever sees it.
+ * Plain JSON/text values and raw bytes can be compressed directly. Response
+ * objects are handled separately so their status and headers are preserved.
+ * Values that Elysia normally treats as body types (Blob/BunFile, FormData,
+ * URLSearchParams, ArrayBuffer, streams, and custom objects) are converted to
+ * a Response before the fallback serializer in src/index.ts can turn them into
+ * JSON accidentally.
  */
 import * as zlib from 'zlib';
 
 const MIN_COMPRESS_BYTES = 1024;
 
-const COMPRESSIBLE_TYPES = [
-    'application/json',
-    'text/html',
-    'text/plain',
-    'text/css',
-    'text/xml',
-    'application/xml',
-    'application/javascript',
-    'image/svg+xml',
-];
+const COMPRESSIBLE_TYPES = ['application/json', 'application/javascript', 'application/xml', 'image/svg+xml'];
 
 const encoder = new TextEncoder();
 
+type HeaderCollection = Headers | Record<string, unknown>;
+
 /**
- * True for async generators / async iterables — e.g. the SSE link-validation
- * stream in src/routes/project.ts (`async function* (...) { yield {...} }`).
- * These are `typeof 'object'` like any plain value, but must never be
- * JSON.stringify-ed or buffered: Elysia turns them into a chunked
- * text/event-stream Response itself.
+ * True for async generators / async iterables, such as SSE handlers.
  */
 export function isAsyncIterable(value: unknown): boolean {
-    return typeof value === 'object' && value !== null && typeof (value as any)[Symbol.asyncIterator] === 'function';
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        typeof (value as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === 'function'
+    );
 }
 
-/** Accept-Encoding is a comma-separated list of tokens, each optionally with a ";q=" weight. */
+function parseQuality(params: string[]): number {
+    const qualityParam = params.find(param => param.trim().toLowerCase().startsWith('q='));
+    if (!qualityParam) return 1;
+
+    const quality = Number(qualityParam.split('=', 2)[1]);
+    if (!Number.isFinite(quality) || quality < 0 || quality > 1) return 0;
+
+    return quality;
+}
+
+/**
+ * Checks whether gzip is acceptable according to the request's
+ * Accept-Encoding header. An explicit gzip entry takes precedence over `*`.
+ */
 export function acceptsGzip(acceptEncodingHeader: string | null): boolean {
     if (!acceptEncodingHeader) return false;
-    return acceptEncodingHeader.split(',').some(token => {
-        const [name, ...params] = token.trim().split(';');
-        if (name !== 'gzip' && name !== '*') return false;
-        const q = params.find(p => p.trim().startsWith('q='));
-        return q === undefined || Number.parseFloat(q.split('=')[1]) > 0;
-    });
+
+    let wildcardQuality: number | undefined;
+
+    for (const token of acceptEncodingHeader.split(',')) {
+        const [rawName, ...params] = token.trim().split(';');
+        const name = rawName.trim().toLowerCase();
+        const quality = parseQuality(params);
+
+        if (name === 'gzip') return quality > 0;
+        if (name === '*' && wildcardQuality === undefined) wildcardQuality = quality;
+    }
+
+    return (wildcardQuality ?? 0) > 0;
 }
 
 export function isCompressibleContentType(contentType: string | null): boolean {
     if (!contentType) return false;
+
     const type = contentType.split(';')[0].trim().toLowerCase();
-    return COMPRESSIBLE_TYPES.includes(type);
+    if (type === 'text/event-stream') return false;
+
+    return (
+        type.startsWith('text/') || COMPRESSIBLE_TYPES.includes(type) || type.endsWith('+json') || type.endsWith('+xml')
+    );
 }
 
-/** Elysia's `set.headers` is a plain object handlers write to as either 'Content-Type' or 'content-type'. */
-export function getHeaderCaseInsensitive(headers: Record<string, unknown> | undefined, name: string): string | null {
+/**
+ * Reads a header from either Elysia's plain header object or a Headers object.
+ */
+export function getHeaderCaseInsensitive(headers: HeaderCollection | undefined, name: string): string | null {
     if (!headers) return null;
+    if (headers instanceof Headers) return headers.get(name);
+
     const lower = name.toLowerCase();
     for (const key of Object.keys(headers)) {
-        if (key.toLowerCase() === lower) {
-            const value = headers[key];
-            return typeof value === 'string' ? value : null;
-        }
+        if (key.toLowerCase() !== lower) continue;
+
+        const value = headers[key];
+        if (typeof value === 'string' || typeof value === 'number') return String(value);
+        if (Array.isArray(value)) return value.join(', ');
+        return null;
     }
+
     return null;
+}
+
+/**
+ * Removes every casing variant of a header from an Elysia header collection.
+ */
+export function deleteHeaderCaseInsensitive(headers: HeaderCollection | undefined, name: string): void {
+    if (!headers) return;
+    if (headers instanceof Headers) {
+        headers.delete(name);
+        return;
+    }
+
+    const lower = name.toLowerCase();
+    for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === lower) delete headers[key];
+    }
+}
+
+/**
+ * Adds a Vary token without dropping existing cache dimensions.
+ */
+export function mergeVaryHeader(existing: string | null, token: string): string {
+    if (!existing) return token;
+
+    const values = existing
+        .split(',')
+        .map(value => value.trim())
+        .filter(Boolean);
+
+    if (values.some(value => value === '*')) return '*';
+    if (!values.some(value => value.toLowerCase() === token.toLowerCase())) values.push(token);
+
+    return values.join(', ');
 }
 
 export type SerializedResponseValue = {
@@ -77,72 +129,180 @@ export type SerializedResponseValue = {
     contentType: string;
 };
 
-/**
- * Mirrors Elysia's own default serialization for values it turns into a
- * Response. Returns undefined for raw bytes (Buffer/Uint8Array) — those are
- * handled directly in compressResponseValue instead, since JSON.stringify-ing
- * a Buffer would corrupt it (route handlers like the CodeMagic/exemindmap
- * editor handlers in src/index.ts return one directly, with their own
- * Content-Type set via set.headers).
- */
-export function serializeResponseValue(responseValue: unknown): SerializedResponseValue | undefined {
-    if (responseValue === undefined || responseValue instanceof Uint8Array) return undefined;
-    const isJson = typeof responseValue === 'object' && responseValue !== null;
-    const text = isJson ? JSON.stringify(responseValue) : String(responseValue);
-    return {
-        bytes: encoder.encode(text),
-        contentType: isJson ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8',
-    };
+function isPlainJsonValue(value: unknown): boolean {
+    if (Array.isArray(value)) return true;
+    if (typeof value !== 'object' || value === null) return false;
+
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
 }
 
 /**
- * Builds a gzip-compressed Response for a plain (non-Response) route return
- * value, or returns undefined when compression shouldn't apply. `setHeaders`
- * is Elysia's `set.headers` — the only place a Content-Type is available
- * when responseValue is raw bytes rather than a JSON-serializable value.
+ * Mirrors Elysia's default serialization for plain JSON values and primitives.
+ * Body-specific and custom object types are handled separately.
  */
-export function compressResponseValue(
-    responseValue: unknown,
-    acceptEncodingHeader: string | null,
-    setHeaders?: Record<string, unknown>,
-): Response | undefined {
-    if (responseValue instanceof Response) return undefined;
-    if (!acceptsGzip(acceptEncodingHeader)) return undefined;
+export function serializeResponseValue(responseValue: unknown): SerializedResponseValue | undefined {
+    if (responseValue === undefined || responseValue === null || responseValue instanceof Uint8Array) return undefined;
 
-    if (responseValue instanceof Uint8Array) {
-        const contentType = getHeaderCaseInsensitive(setHeaders, 'content-type');
-        if (!isCompressibleContentType(contentType)) return undefined;
-        if (responseValue.length < MIN_COMPRESS_BYTES) return undefined;
+    if (isPlainJsonValue(responseValue)) {
+        return {
+            bytes: encoder.encode(JSON.stringify(responseValue)),
+            contentType: 'application/json; charset=utf-8',
+        };
+    }
 
-        return new Response(zlib.gzipSync(responseValue), {
-            headers: { 'Content-Type': contentType as string, 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding' },
+    if (typeof responseValue === 'object') return undefined;
+
+    return {
+        bytes: encoder.encode(String(responseValue)),
+        contentType: 'text/plain; charset=utf-8',
+    };
+}
+
+function createPassThroughResponse(responseValue: unknown, setHeaders?: HeaderCollection): Response | undefined {
+    if (responseValue === null) return new Response(null);
+
+    const explicitContentType = getHeaderCaseInsensitive(setHeaders, 'content-type');
+
+    if (responseValue instanceof Blob) {
+        const headers = new Headers();
+        const contentType = explicitContentType || responseValue.type;
+        if (contentType) headers.set('content-type', contentType);
+        headers.set('content-length', responseValue.size.toString());
+        return new Response(responseValue, { headers });
+    }
+
+    if (typeof responseValue === 'object' && responseValue !== null) {
+        const constructorName = responseValue.constructor?.name;
+        const wrappedValue = (responseValue as { value?: unknown }).value;
+
+        if (constructorName === 'ElysiaFile' && wrappedValue instanceof Blob) {
+            const headers = new Headers();
+            const contentType =
+                explicitContentType ||
+                (typeof (responseValue as { type?: unknown }).type === 'string'
+                    ? ((responseValue as { type: string }).type as string)
+                    : wrappedValue.type);
+            if (contentType) headers.set('content-type', contentType);
+            headers.set('content-length', wrappedValue.size.toString());
+            return new Response(wrappedValue, { headers });
+        }
+
+        if (constructorName === 'Cookie' && wrappedValue !== undefined) {
+            return new Response(String(wrappedValue));
+        }
+    }
+
+    if (responseValue instanceof FormData || responseValue instanceof URLSearchParams) {
+        return new Response(responseValue);
+    }
+
+    if (responseValue instanceof ArrayBuffer) return new Response(responseValue);
+
+    if (ArrayBuffer.isView(responseValue) && !(responseValue instanceof Uint8Array)) {
+        const bytes = new Uint8Array(responseValue.buffer, responseValue.byteOffset, responseValue.byteLength);
+        return new Response(bytes);
+    }
+
+    if (responseValue instanceof ReadableStream) return new Response(responseValue);
+
+    if (responseValue instanceof Error) {
+        return Response.json({
+            name: responseValue.name,
+            message: responseValue.message,
+            cause: responseValue.cause,
         });
     }
 
-    const serialized = serializeResponseValue(responseValue);
-    if (!serialized || serialized.bytes.length < MIN_COMPRESS_BYTES) return undefined;
+    if (
+        typeof responseValue === 'object' &&
+        responseValue !== null &&
+        !(responseValue instanceof Uint8Array) &&
+        !isPlainJsonValue(responseValue)
+    ) {
+        const toResponse = (responseValue as { toResponse?: () => unknown }).toResponse;
+        if (typeof toResponse === 'function') {
+            const result = toResponse.call(responseValue);
+            if (result instanceof Response) return result;
+        }
 
-    return new Response(zlib.gzipSync(serialized.bytes), {
+        return new Response(String(responseValue));
+    }
+
+    return undefined;
+}
+
+function buildCompressedResponse(bytes: Uint8Array, contentType: string, vary: string): Response {
+    const compressed = zlib.gzipSync(bytes);
+
+    return new Response(compressed, {
         headers: {
-            'Content-Type': serialized.contentType,
+            'Content-Type': contentType,
             'Content-Encoding': 'gzip',
-            'Vary': 'Accept-Encoding',
+            'Content-Length': compressed.length.toString(),
+            Vary: vary,
         },
     });
 }
 
 /**
- * Re-wraps an explicit Response with a gzip-compressed body, preserving its
- * status and headers, or returns undefined when compression shouldn't apply
- * (already encoded, non-compressible content-type, or the client doesn't
- * accept gzip) — checked before the body is read, so redirects/binary/
- * streamed responses are left completely untouched.
- *
- * Once the body IS read to measure it, this never returns undefined anymore
- * — a Response's body stream can only be consumed once, so falling back to
- * "let the caller use the original response" at that point would silently
- * send an empty body. Below the size threshold, it returns an equivalent
- * uncompressed Response reconstructed from the bytes already read instead.
+ * Builds a gzip-compressed Response for a plain route return value. It also
+ * preserves body-specific values that Elysia would otherwise serialize itself
+ * before src/index.ts's explicit fallback runs.
+ */
+export function compressResponseValue(
+    responseValue: unknown,
+    acceptEncodingHeader: string | null,
+    setHeaders?: HeaderCollection,
+): Response | undefined {
+    if (responseValue instanceof Response) return undefined;
+
+    const passThroughResponse = createPassThroughResponse(responseValue, setHeaders);
+    if (passThroughResponse) return passThroughResponse;
+
+    if (responseValue instanceof Uint8Array) {
+        const contentType = getHeaderCaseInsensitive(setHeaders, 'content-type');
+        if (!isCompressibleContentType(contentType)) return undefined;
+        if (getHeaderCaseInsensitive(setHeaders, 'content-encoding')) return undefined;
+        if (!acceptsGzip(acceptEncodingHeader) || responseValue.length < MIN_COMPRESS_BYTES) return undefined;
+
+        deleteHeaderCaseInsensitive(setHeaders, 'content-length');
+        const vary = mergeVaryHeader(getHeaderCaseInsensitive(setHeaders, 'vary'), 'Accept-Encoding');
+        return buildCompressedResponse(responseValue, contentType as string, vary);
+    }
+
+    const serialized = serializeResponseValue(responseValue);
+    if (!serialized) return undefined;
+
+    const explicitContentType = getHeaderCaseInsensitive(setHeaders, 'content-type');
+    const contentType = explicitContentType || serialized.contentType;
+    const canCompress =
+        acceptsGzip(acceptEncodingHeader) &&
+        !getHeaderCaseInsensitive(setHeaders, 'content-encoding') &&
+        isCompressibleContentType(contentType) &&
+        serialized.bytes.length >= MIN_COMPRESS_BYTES;
+
+    if (canCompress) {
+        deleteHeaderCaseInsensitive(setHeaders, 'content-length');
+        const vary = mergeVaryHeader(getHeaderCaseInsensitive(setHeaders, 'vary'), 'Accept-Encoding');
+        return buildCompressedResponse(serialized.bytes, contentType, vary);
+    }
+
+    if (explicitContentType) {
+        return new Response(serialized.bytes, {
+            headers: { 'Content-Type': explicitContentType },
+        });
+    }
+
+    return undefined;
+}
+
+/**
+ * Re-wraps an explicit Response with a gzip-compressed body while preserving
+ * its status and headers. The application installs CORS globally with
+ * `Vary: *`; when the Response itself has no Vary header, the compressed
+ * Response keeps that value so Elysia does not replace it with the narrower
+ * `Accept-Encoding` dimension.
  */
 export async function compressResponse(
     response: Response,
@@ -152,8 +312,6 @@ export async function compressResponse(
     if (!isCompressibleContentType(response.headers.get('content-type'))) return undefined;
     if (!acceptsGzip(acceptEncodingHeader)) return undefined;
 
-    // Fast path: skip without touching the body when its declared length
-    // already rules out compression being worth it.
     const declaredLength = Number(response.headers.get('content-length'));
     if (declaredLength > 0 && declaredLength < MIN_COMPRESS_BYTES) return undefined;
 
@@ -166,10 +324,14 @@ export async function compressResponse(
         });
     }
 
+    const compressed = zlib.gzipSync(body);
     const headers = new Headers(response.headers);
+    const existingVary = headers.get('vary');
+
     headers.delete('content-length');
     headers.set('content-encoding', 'gzip');
-    headers.set('vary', 'Accept-Encoding');
+    headers.set('content-length', compressed.length.toString());
+    headers.set('vary', existingVary ? mergeVaryHeader(existingVary, 'Accept-Encoding') : '*');
 
-    return new Response(zlib.gzipSync(body), { status: response.status, statusText: response.statusText, headers });
+    return new Response(compressed, { status: response.status, statusText: response.statusText, headers });
 }
