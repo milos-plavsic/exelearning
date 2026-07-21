@@ -27,7 +27,7 @@ function createCompressionApp() {
                 return (await compressResponse(responseValue, acceptEncoding)) ?? responseValue;
             }
 
-            const compressed = compressResponseValue(responseValue, acceptEncoding, set.headers);
+            const compressed = await compressResponseValue(responseValue, acceptEncoding, set.headers);
             if (compressed) return compressed;
 
             const status = set.status as number;
@@ -146,8 +146,8 @@ describe('header helpers', () => {
 describe('compressResponseValue', () => {
     const bigObject = { items: Array.from({ length: 100 }, (_, i) => ({ id: i, name: `item-${i}` })) };
 
-    it('compresses a large JSON-serializable value when the client accepts gzip', () => {
-        const response = compressResponseValue(bigObject, 'gzip, deflate, br');
+    it('compresses a large JSON-serializable value when the client accepts gzip', async () => {
+        const response = await compressResponseValue(bigObject, 'gzip, deflate, br');
         expect(response).toBeInstanceOf(Response);
         expect(response?.headers.get('Content-Encoding')).toBe('gzip');
         expect(response?.headers.get('Vary')).toBe('Accept-Encoding');
@@ -155,35 +155,48 @@ describe('compressResponseValue', () => {
     });
 
     it('produces a gzip body that decompresses back to the original JSON', async () => {
-        const response = compressResponseValue(bigObject, 'gzip');
+        const response = await compressResponseValue(bigObject, 'gzip');
         const bytes = new Uint8Array(await response!.arrayBuffer());
         const decompressed = zlib.gunzipSync(bytes).toString('utf-8');
         expect(JSON.parse(decompressed)).toEqual(bigObject);
     });
 
-    it('does not compress when the client has no gzip support', () => {
-        expect(compressResponseValue(bigObject, 'br')).toBeUndefined();
-        expect(compressResponseValue(bigObject, null)).toBeUndefined();
+    it('round-trips a >1KB compressible body: compress then gunzip equals the original, tagged Content-Encoding: gzip', async () => {
+        const original = `<html><body>${'y'.repeat(4096)}</body></html>`;
+        expect(Buffer.byteLength(original)).toBeGreaterThan(1024);
+
+        const response = await compressResponseValue(original, 'gzip', { 'Content-Type': 'text/html; charset=utf-8' });
+
+        expect(response).toBeInstanceOf(Response);
+        expect(response?.headers.get('Content-Encoding')).toBe('gzip');
+
+        const compressed = new Uint8Array(await response!.arrayBuffer());
+        expect(zlib.gunzipSync(compressed).toString('utf-8')).toBe(original);
     });
 
-    it('does not compress a value below the size threshold', () => {
-        expect(compressResponseValue({ ok: true }, 'gzip')).toBeUndefined();
+    it('does not compress when the client has no gzip support', async () => {
+        expect(await compressResponseValue(bigObject, 'br')).toBeUndefined();
+        expect(await compressResponseValue(bigObject, null)).toBeUndefined();
     });
 
-    it('leaves an explicit Response to compressResponse', () => {
+    it('does not compress a value below the size threshold', async () => {
+        expect(await compressResponseValue({ ok: true }, 'gzip')).toBeUndefined();
+    });
+
+    it('leaves an explicit Response to compressResponse', async () => {
         const original = new Response('binary-ish content', { status: 206 });
-        expect(compressResponseValue(original, 'gzip')).toBeUndefined();
+        expect(await compressResponseValue(original, 'gzip')).toBeUndefined();
     });
 
     it('preserves null as an empty response instead of serializing it as text', async () => {
-        const response = compressResponseValue(null, null);
+        const response = await compressResponseValue(null, null);
         expect(response).toBeInstanceOf(Response);
         expect(await response!.text()).toBe('');
     });
 
     it('preserves Blob/BunFile-style bodies instead of JSON-stringifying them', async () => {
         const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
-        const response = compressResponseValue(new Blob([bytes]), null, { 'Content-Type': 'application/zip' });
+        const response = await compressResponseValue(new Blob([bytes]), null, { 'Content-Type': 'application/zip' });
 
         expect(response?.headers.get('Content-Type')).toBe('application/zip');
         expect(response?.headers.get('Content-Length')).toBe(bytes.length.toString());
@@ -196,15 +209,15 @@ describe('compressResponseValue', () => {
             public readonly type = 'text/plain';
         }
 
-        const response = compressResponseValue(new ElysiaFile(), null);
+        const response = await compressResponseValue(new ElysiaFile(), null);
 
         expect(response?.headers.get('Content-Type')).toBe('text/plain');
         expect(await response!.text()).toBe('static-content');
     });
 
-    it('keeps an explicit HTML content type for string responses', () => {
+    it('keeps an explicit HTML content type for string responses', async () => {
         const html = `<html><body>${'x'.repeat(2000)}</body></html>`;
-        const response = compressResponseValue(html, 'gzip', { 'Content-Type': 'text/html; charset=utf-8' });
+        const response = await compressResponseValue(html, 'gzip', { 'Content-Type': 'text/html; charset=utf-8' });
 
         expect(response?.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
         expect(response?.headers.get('Content-Encoding')).toBe('gzip');
@@ -213,15 +226,15 @@ describe('compressResponseValue', () => {
     describe('raw bytes with Content-Type from set.headers', () => {
         const html = Buffer.from(`<html><body>${'x'.repeat(2000)}</body></html>`);
 
-        it('compresses when Content-Type is compressible', () => {
-            const response = compressResponseValue(html, 'gzip', { 'Content-Type': 'text/html; charset=utf-8' });
+        it('compresses when Content-Type is compressible', async () => {
+            const response = await compressResponseValue(html, 'gzip', { 'Content-Type': 'text/html; charset=utf-8' });
             expect(response).toBeInstanceOf(Response);
             expect(response?.headers.get('Content-Encoding')).toBe('gzip');
             expect(response?.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
         });
 
         it('produces a body that decompresses back to the exact original bytes', async () => {
-            const response = compressResponseValue(html, 'gzip', { 'Content-Type': 'text/html' });
+            const response = await compressResponseValue(html, 'gzip', { 'Content-Type': 'text/html' });
             const decompressed = zlib.gunzipSync(new Uint8Array(await response!.arrayBuffer()));
             expect(Buffer.compare(decompressed, html)).toBe(0);
         });
@@ -232,15 +245,15 @@ describe('compressResponseValue', () => {
                 'Content-Length': html.length.toString(),
             };
 
-            const response = compressResponseValue(html, 'gzip', setHeaders);
+            const response = await compressResponseValue(html, 'gzip', setHeaders);
             const compressedLength = (await response!.arrayBuffer()).byteLength;
 
             expect(getHeaderCaseInsensitive(setHeaders, 'content-length')).toBeNull();
             expect(response?.headers.get('Content-Length')).toBe(compressedLength.toString());
         });
 
-        it('combines Vary with existing cache dimensions', () => {
-            const response = compressResponseValue(html, 'gzip', {
+        it('combines Vary with existing cache dimensions', async () => {
+            const response = await compressResponseValue(html, 'gzip', {
                 'Content-Type': 'text/html',
                 Vary: 'Origin',
             });
@@ -248,8 +261,8 @@ describe('compressResponseValue', () => {
             expect(response?.headers.get('Vary')).toBe('Origin, Accept-Encoding');
         });
 
-        it('preserves Vary: * from the CORS plugin', () => {
-            const response = compressResponseValue(html, 'gzip', {
+        it('preserves Vary: * from the CORS plugin', async () => {
+            const response = await compressResponseValue(html, 'gzip', {
                 'Content-Type': 'text/html',
                 Vary: '*',
             });
@@ -257,9 +270,11 @@ describe('compressResponseValue', () => {
             expect(response?.headers.get('Vary')).toBe('*');
         });
 
-        it('does not compress without a compressible Content-Type', () => {
-            expect(compressResponseValue(html, 'gzip', { 'Content-Type': 'application/octet-stream' })).toBeUndefined();
-            expect(compressResponseValue(html, 'gzip', undefined)).toBeUndefined();
+        it('does not compress without a compressible Content-Type', async () => {
+            expect(
+                await compressResponseValue(html, 'gzip', { 'Content-Type': 'application/octet-stream' }),
+            ).toBeUndefined();
+            expect(await compressResponseValue(html, 'gzip', undefined)).toBeUndefined();
         });
     });
 });

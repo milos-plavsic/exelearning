@@ -9,6 +9,15 @@
  * JSON accidentally.
  */
 import * as zlib from 'zlib';
+import { promisify } from 'util';
+
+/**
+ * Asynchronous gzip. Compression runs on libuv's threadpool instead of the
+ * synchronous `zlib.gzipSync`, so it does not block the single JS thread while
+ * every eligible response is compressed. Output bytes are identical to
+ * `gzipSync` for the same input (same default compression level).
+ */
+const gzipAsync = promisify(zlib.gzip);
 
 const MIN_COMPRESS_BYTES = 1024;
 
@@ -232,8 +241,8 @@ function createPassThroughResponse(responseValue: unknown, setHeaders?: HeaderCo
     return undefined;
 }
 
-function buildCompressedResponse(bytes: Uint8Array, contentType: string, vary: string): Response {
-    const compressed = zlib.gzipSync(bytes);
+async function buildCompressedResponse(bytes: Uint8Array, contentType: string, vary: string): Promise<Response> {
+    const compressed = await gzipAsync(bytes);
 
     return new Response(compressed, {
         headers: {
@@ -250,11 +259,11 @@ function buildCompressedResponse(bytes: Uint8Array, contentType: string, vary: s
  * preserves body-specific values that Elysia would otherwise serialize itself
  * before src/index.ts's explicit fallback runs.
  */
-export function compressResponseValue(
+export async function compressResponseValue(
     responseValue: unknown,
     acceptEncodingHeader: string | null,
     setHeaders?: HeaderCollection,
-): Response | undefined {
+): Promise<Response | undefined> {
     if (responseValue instanceof Response) return undefined;
 
     const passThroughResponse = createPassThroughResponse(responseValue, setHeaders);
@@ -268,7 +277,7 @@ export function compressResponseValue(
 
         deleteHeaderCaseInsensitive(setHeaders, 'content-length');
         const vary = mergeVaryHeader(getHeaderCaseInsensitive(setHeaders, 'vary'), 'Accept-Encoding');
-        return buildCompressedResponse(responseValue, contentType as string, vary);
+        return await buildCompressedResponse(responseValue, contentType as string, vary);
     }
 
     const serialized = serializeResponseValue(responseValue);
@@ -285,7 +294,7 @@ export function compressResponseValue(
     if (canCompress) {
         deleteHeaderCaseInsensitive(setHeaders, 'content-length');
         const vary = mergeVaryHeader(getHeaderCaseInsensitive(setHeaders, 'vary'), 'Accept-Encoding');
-        return buildCompressedResponse(serialized.bytes, contentType, vary);
+        return await buildCompressedResponse(serialized.bytes, contentType, vary);
     }
 
     if (explicitContentType) {
@@ -324,7 +333,7 @@ export async function compressResponse(
         });
     }
 
-    const compressed = zlib.gzipSync(body);
+    const compressed = await gzipAsync(body);
     const headers = new Headers(response.headers);
     const existingVary = headers.get('vary');
 

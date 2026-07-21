@@ -295,7 +295,7 @@ const app = new Elysia()
             return (await compressResponse(responseValue, acceptEncoding)) ?? responseValue;
         }
 
-        const compressed = compressResponseValue(responseValue, acceptEncoding, set.headers);
+        const compressed = await compressResponseValue(responseValue, acceptEncoding, set.headers);
         if (compressed) return compressed;
 
         const status = set.status as number;
