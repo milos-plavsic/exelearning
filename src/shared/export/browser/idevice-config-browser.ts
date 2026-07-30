@@ -73,6 +73,7 @@ export function getIdeviceConfig(type: string): IdeviceConfigCache {
         'slide',
         'three-d-viewer',
         'markdown-text',
+        'interactive-video',
     ];
     const isJson = jsonIdevices.includes(cssClass) || jsonIdevices.includes(normalized);
 

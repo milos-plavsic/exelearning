@@ -64,6 +64,27 @@ so SCORM does nothing outside SCORM exports.
 
 ---
 
+### 1.1 What an iDevice must pass
+
+Both SCORM and xAPI are driven from the same per-iDevice `options`/`game` object,
+so its shape is a contract, not a convention:
+
+- `main` — the **bare element id** of the iDevice's own container. The shared
+  layer resolves it as `$('#' + main)` (or as a selector when it starts with
+  `.`) and derives `ideviceId`, `title` and `ideviceNumber` from the DOM. It is
+  also what keeps several instances of the same iDevice on one page reporting
+  as themselves.
+- `scorerp` — the score, 0–10.
+- `weighted`, `isScorm`, `repeatActivity` — from the iDevice's SCORM options.
+- `msgs` — the message map; this is how an iDevice's Custom texts reach the
+  shared layer.
+
+`registerActivity(options)` is called once, when the activity binds;
+`sendScoreNew(auto, options)` is called when the score changes — and it is
+`sendScoreNew`, not `registerActivity`, that emits the xAPI statement (§2).
+Passing an object of a different shape throws inside the shared layer, and since
+these calls are normally guarded the score then disappears without an error.
+
 ## 2. How xAPI is emitted
 
 xAPI emission lives in `public/app/common/xapi/exe_xapi.js`

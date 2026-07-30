@@ -374,6 +374,7 @@ window.$exeExport = {
                 'three-sixty-viewer',
                 'trueorfalse',
                 'adaptative-quiz',
+                'interactive-video',
             ];
             const ideviceType = ideviceNode.getAttribute('data-idevice-type');
             const needsJsonRender = isJsonIdevice && jsonOnlyIdevices.includes(ideviceType);

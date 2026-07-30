@@ -33,6 +33,7 @@ import type { AssetHandler, ElpxImportOptions, ElpxImportResult, ImportProgress,
 import { BrowserAssetHandler, createBrowserAssetHandler } from '../adapters/BrowserAssetHandler';
 
 // Import registry and type utilities
+import { splitInteractiveVideoBlock, splitInteractiveVideoSurroundingContent } from '../interactiveVideoContentSplit';
 import { LegacyHandlerRegistry, LEGACY_TYPE_MAP, getLegacyTypeName } from '../legacy-handlers/HandlerRegistry';
 
 // Import base class for handler type checking
@@ -236,6 +237,10 @@ if (typeof window !== 'undefined') {
         BrowserAssetHandler,
         createBrowserImporter,
         createBrowserAssetHandler,
+
+        // Import-time transforms
+        splitInteractiveVideoBlock,
+        splitInteractiveVideoSurroundingContent,
 
         // Registry
         LegacyHandlerRegistry,

@@ -45,6 +45,7 @@ import {
     LEGACY_TYPE_ALIASES,
     defaultLogger,
 } from './interfaces';
+import { splitInteractiveVideoSurroundingContent } from './interactiveVideoContentSplit';
 import { stripLegacyExeTextWrapper } from './legacyExeTextWrapper';
 
 import { LegacyXmlParser } from './LegacyXmlParser';
@@ -640,6 +641,10 @@ export class ElpxImporter {
         // Remap exe-node: internal links to new page IDs
         this.remapInternalPageLinks(pageStructures, idRemap);
 
+        // Interactive Video: convert the retired contentBefore/contentAfter
+        // fields into sibling Text iDevices in the same block.
+        splitInteractiveVideoSurroundingContent(pageStructures);
+
         // Phase 3: Importing structure (50-80%)
         this.reportProgress('structure', 50, 'Importing structure...');
 
@@ -872,6 +877,11 @@ export class ElpxImporter {
 
         // Remap exe-node: internal links to new page IDs
         this.remapInternalPageLinks(pageStructures, pageIdRemap);
+
+        // Interactive Video: convert the retired contentBefore/contentAfter
+        // fields into sibling Text iDevices in the same block (a no-op for
+        // true legacy content, which never carried those fields).
+        splitInteractiveVideoSurroundingContent(pageStructures);
 
         return pageStructures;
     }

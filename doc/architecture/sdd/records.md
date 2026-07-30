@@ -10,6 +10,7 @@ update the table and the per-status lists below.
 | ID | Title | Status | Date |
 |---|---|---|---|
 | SDD-0000 | Template | Template | — |
+| SDD-0001 | Interactive Video iDevice refactor | In Review | 2026-07-09 |
 
 ## Draft SDDs
 
@@ -17,7 +18,8 @@ _No draft SDDs yet._
 
 ## In Review SDDs
 
-_No SDDs in review yet._
+- [SDD-0001](SDD-0001-interactive-video-refactor.md) — Interactive Video iDevice
+  refactor.
 
 ## Accepted SDDs
 
