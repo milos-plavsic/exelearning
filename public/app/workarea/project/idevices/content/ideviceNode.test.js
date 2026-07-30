@@ -3128,6 +3128,27 @@ describe('IdeviceNode', () => {
             vi.useRealTimers();
         });
 
+        it('suppresses the database-error modal when the device refused the save (validation)', async () => {
+            // $exeDevice.save() === false means the device already alerted the
+            // author with the real reason and stays in edition; the deferred
+            // generic alert would land after that one closes and block the page.
+            vi.useFakeTimers();
+            idevice.saveIdeviceProcess.mockImplementation(async () => {
+                idevice.saveRefusedByDevice = true;
+                return false;
+            });
+            idevice.toogleIdeviceButtonsState = vi.fn();
+            eXeLearning.app.modals.alert.modal = { _isShown: false };
+            eXeLearning.app.modals.confirm.modal = { _isShown: false };
+
+            await idevice.save(false);
+            vi.advanceTimersByTime(500);
+
+            expect(idevice.toogleIdeviceButtonsState).toHaveBeenCalledWith(false);
+            expect(eXeLearning.app.modals.alert.show).not.toHaveBeenCalled();
+            vi.useRealTimers();
+        });
+
         it('releases lock in Yjs when enabled', async () => {
             eXeLearning.app.project._yjsEnabled = true;
             idevice.yjsComponentId = 'yjs-comp';
@@ -3190,6 +3211,16 @@ describe('IdeviceNode', () => {
     });
 
     describe('saveIdeviceProcess', () => {
+        it('starts every attempt with a clean device-refusal flag', async () => {
+            idevice.idevice = { componentType: 'json' };
+            idevice.saveRefusedByDevice = true;
+            idevice.apiSaveIdeviceJson = vi.fn().mockResolvedValue({ responseMessage: 'OK' });
+
+            await idevice.saveIdeviceProcess();
+
+            expect(idevice.saveRefusedByDevice).toBe(false);
+        });
+
         it('calls apiSaveIdeviceJson for json type', async () => {
             idevice.idevice = { componentType: 'json' };
             idevice.apiSaveIdeviceJson = vi.fn().mockResolvedValue({ responseMessage: 'OK' });
@@ -3225,6 +3256,17 @@ describe('IdeviceNode', () => {
             idevice.htmlView = '<p>HTML to save</p>';
             idevice.ideviceBody = document.createElement('div');
             idevice.apiSendDataService = vi.fn().mockResolvedValue({ responseMessage: 'OK' });
+        });
+
+        it('marks a device refusal when $exeDevice.save() returns false', async () => {
+            global.$exeDevice = { save: vi.fn().mockReturnValue(false) };
+
+            const result = await idevice.apiSaveIdeviceViewHTML(true);
+
+            expect(result).toBe(false);
+            expect(idevice.saveRefusedByDevice).toBe(true);
+            expect(idevice.ideviceBody.classList.contains('save-error')).toBe(true);
+            delete global.$exeDevice;
         });
 
         it('sends htmlView params to service', async () => {
@@ -3304,6 +3346,17 @@ describe('IdeviceNode', () => {
             const result = await idevice.apiSaveIdeviceJson(false);
 
             expect(result).toBe(false);
+        });
+
+        it('marks a device refusal when $exeDevice.save() returns false', async () => {
+            global.$exeDevice = { save: vi.fn().mockReturnValue(false) };
+
+            const result = await idevice.apiSaveIdeviceJson(true);
+
+            expect(result).toBe(false);
+            expect(idevice.saveRefusedByDevice).toBe(true);
+            expect(idevice.ideviceBody.classList.contains('save-error')).toBe(true);
+            delete global.$exeDevice;
         });
     });
 
