@@ -16,21 +16,17 @@ changes status, update the table and the per-status lists below.
 | ADR-0004 | Normalize external video providers behind an adapter boundary | Proposed | 2026-07-09 |
 | ADR-0005 | Keep the Interactive Video iDevice framework-free | Proposed | 2026-07-09 |
 | ADR-0006 | TypeScript iDevices: src/ sources compiled by one convention-based build | Proposed | 2026-07-30 |
+| [ADR-0042](ADR-0042-no-generic-open-response-assessment-idevice.md) | Do not implement a generic open-response assessment iDevice | Proposed | 2026-07-16 |
 
 ## Proposed ADRs
 
 - [ADR-0001](ADR-0001-native-inline-interactive-video-editor.md) — Native inline
-  editor for the Interactive Video iDevice.
 - [ADR-0002](ADR-0002-versioned-json-properties-for-interactive-video.md) — Store
-  Interactive Video data as versioned JSON properties.
 - [ADR-0003](ADR-0003-declarative-script-free-interactive-video-runtime.md) —
-  Declarative, script-free learner runtime for Interactive Video.
 - [ADR-0004](ADR-0004-normalize-external-video-providers-behind-adapter.md) —
-  Normalize external video providers behind an adapter boundary.
 - [ADR-0005](ADR-0005-keep-interactive-video-framework-free.md) — Keep the
-  Interactive Video iDevice framework-free.
 - [ADR-0006](ADR-0006-typescript-idevices-build-convention.md) — TypeScript
-  iDevices: `src/` sources compiled by one convention-based build.
+- [ADR-0042: Do not implement a generic open-response assessment iDevice](ADR-0042-no-generic-open-response-assessment-idevice.md)
 
 ## Accepted ADRs
 
