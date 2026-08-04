@@ -11,6 +11,7 @@ changes status, update the table and the per-status lists below.
 |---|---|---|---|
 | ADR-0000 | Template | Template | — |
 | ADR-0001 | Native inline editor for the Interactive Video iDevice | Proposed | 2026-07-09 |
+| [ADR-0001](ADR-0001-runtime-specific-elpx-import-limits.md) | Runtime-specific ELP/ELPX decompression limits | Proposed | 2026-07-21 |
 | ADR-0002 | Store Interactive Video data as versioned JSON properties | Proposed | 2026-07-09 |
 | ADR-0003 | Declarative, script-free learner runtime for Interactive Video | Proposed | 2026-07-09 |
 | ADR-0004 | Normalize external video providers behind an adapter boundary | Proposed | 2026-07-09 |
@@ -21,6 +22,7 @@ changes status, update the table and the per-status lists below.
 ## Proposed ADRs
 
 - [ADR-0001](ADR-0001-native-inline-interactive-video-editor.md) — Native inline
+- [ADR-0001](ADR-0001-runtime-specific-elpx-import-limits.md) — Runtime-specific ELP/ELPX decompression limits (#2193)
 - [ADR-0002](ADR-0002-versioned-json-properties-for-interactive-video.md) — Store
 - [ADR-0003](ADR-0003-declarative-script-free-interactive-video-runtime.md) —
 - [ADR-0004](ADR-0004-normalize-external-video-providers-behind-adapter.md) —
