@@ -73,6 +73,7 @@ export function getIdeviceConfig(type: string): IdeviceConfigCache {
         'slide',
         'three-d-viewer',
         'markdown-text',
+        'file-attachment',
         'interactive-video',
         'lomloe',
         'digcompedu',
