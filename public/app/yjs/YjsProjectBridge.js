@@ -3427,6 +3427,7 @@ class YjsProjectBridge {
             }, trace);
             Logger.log('[YjsProjectBridge] ELPX exported via SharedExporters:', exportFilename);
           }
+          this.assetManager?.markAssetsSavedLocally?.();
           return { saved: true };
         } else {
           this.finalizeElpxExportTrace('error', {
@@ -3793,6 +3794,12 @@ class YjsProjectBridge {
     } else if (this.documentManager && !this.documentManager.isDirty) {
       this.documentManager.markDirty();
     }
+
+    // Every import funnels through here — the online menu goes via
+    // projectManager.importFromElpxViaYjs, but the static build and the
+    // embedding bridge call this method directly — so this is the only place
+    // that reports references the package could not satisfy (#2223).
+    window.eXeLearning?.app?.project?.showMissingAssetsNotice?.(stats);
 
     return stats;
   }
